@@ -99,16 +99,13 @@ class Connection {
   }
 
   _onClose(code) {
-    this.onClose();
     this.init();
-
+    this.onClose();
     // 1000 = closed by me normally
     if (code !== 1000) {
       this.logger.error(
         `Websocket disconnected from ${this.socketAddresses[this.socket_index]} with code ${code}.`
       );
-
-      this.reconnect();
     }
   }
 } // Connection
