@@ -125,7 +125,8 @@ class StateReceiver {
       onError: (err) => this._onError(err),
       onMessage: this.onMessage.bind(this),
       onClose: () => {
-        this.init();
+        this.logger.info(`Connection is closed. Restart!`);
+        this.start();
       },
     });
 
@@ -236,7 +237,7 @@ class StateReceiver {
   }
 
   send(request) {
-    if (this.connection && this.connection.ws) {
+    if (this.connection && this.connection.ws && this.connection.connected == true) {
       this.connection.ws.send(serialize(this.types, 'request', request));
     } else {
       this.logger.warn('Connection is not ready, cannot send message.');
