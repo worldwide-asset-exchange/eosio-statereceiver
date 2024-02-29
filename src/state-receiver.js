@@ -261,7 +261,7 @@ class StateReceiver {
     this.processCount += 1;
     if (this.debuging) {
       this.logger.info(
-        `Enter processMessageData ${this.processCount}, ${this.processingMessageData} `
+        `Enter processMessageData ${this.processCount}, ${this.processingMessageData}`
       );
     }
     this.processingMessageData = true;
