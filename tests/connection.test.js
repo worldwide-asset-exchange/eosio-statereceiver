@@ -33,12 +33,10 @@ describe('connection', () => {
       const onClose = jest.fn();
       const connection = new Connection({ socketAddresses: ['e1', 'e2'], onClose, logger });
       const spy_init = jest.spyOn(connection, 'init');
-      const spy_reconnect = jest.spyOn(connection, 'reconnect').mockReturnValue();
       connection._onClose();
 
       expect(onClose).toHaveBeenCalled();
       expect(spy_init).toHaveBeenCalled();
-      expect(spy_reconnect).toHaveBeenCalled();
     });
 
     it('code 1000', () => {

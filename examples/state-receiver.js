@@ -42,7 +42,7 @@ const statInterval = setInterval(() => {
 // Used for debugging
 let prevTraces = {};
 let lastBlock = 0;
-const debugging = (process.env.DEBUG_STATE_RECEIVER == 1); // set to true to run the debug logic below
+const debugging = process.env.DEBUG_STATE_RECEIVER == 1; // set to true to run the debug logic below
 
 sr.registerTraceHandler({
   async processTrace(block_num, traces) {
