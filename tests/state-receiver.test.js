@@ -58,6 +58,7 @@ describe('state receiver', () => {
     const sr = createStateReceiver();
     sr.types = { abi: 'abi' };
     sr.connection = createConnection();
+    sr.connection.connected = true;
     serialize.mockReturnValue('serialized message');
 
     sr.sendAck(15);
@@ -561,6 +562,7 @@ describe('state receiver', () => {
       const sr = createStateReceiver();
       sr.types = { abi: 'abi' };
       sr.connection = createConnection();
+      sr.connection.connected = true;
       serialize.mockReturnValue('serialized message');
 
       sr.send('message');
