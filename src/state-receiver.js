@@ -88,6 +88,7 @@ class StateReceiver {
       this.eosApi = config.eosApi;
     }
     this.processCount = 0;
+    this.debuging = process.env.DEBUG_STATE_RECEIVER == 1;
   }
 
   init() {
@@ -106,7 +107,9 @@ class StateReceiver {
     this.logger.info(`==== Starting the receiver.`);
 
     if (this.processingMessageData == true) {
-      this.logger.info('Wait for processingMessageData to finish!');
+      if (this.debuging) {
+        this.logger.info('Wait for processingMessageData to finish!');
+      }
       let start = this.start.bind(this);
       setTimeout(start, 1000);
       return;
@@ -125,7 +128,9 @@ class StateReceiver {
       onError: (err) => this._onError(err),
       onMessage: this.onMessage.bind(this),
       onClose: () => {
-        this.logger.info(`Connection is closed. Restart!`);
+        if (this.debuging) {
+          this.logger.info(`Connection is closed. Restart!`);
+        }
         this.start();
       },
     });
@@ -254,7 +259,9 @@ class StateReceiver {
       return;
     }
     this.processCount += 1;
-    this.logger.info('Enter processMessageData', this.processCount, this.processingMessageData);
+    if (this.debuging) {
+      this.logger.info(`Enter processMessageData ${this.processCount}, ${this.processingMessageData} `);
+    }
     this.processingMessageData = true;
 
     // this.logger.debug(`Processing message data...`);
@@ -301,7 +308,9 @@ class StateReceiver {
       this._onError(err);
     } finally {
       this.processingMessageData = false;
-      this.logger.info('Exit processMessageData', this.processCount);
+      if (this.debuging) {
+        this.logger.info(`Exit processMessageData ${this.processCount}`);
+      }
     }
     // this.logger.debug(`Processing message data stop.`);
   }
