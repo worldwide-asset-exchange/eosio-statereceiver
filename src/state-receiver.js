@@ -12,6 +12,7 @@ const deserializeDeep = require('./deserialize-deep');
  * @callback ProcessTrace
  * @param {number} block_num
  * @param {Array<*>} traces
+ * @param {string} block_time
  * @returns {Promise<void>}
  */
 
@@ -334,9 +335,10 @@ class StateReceiver {
     }
 
     const block_num = +blockData.this_block.block_num;
+    const block_time = blockData.block.timestamp;
 
     for (const handler of this.traceHandlers) {
-      await handler.processTrace(block_num, blockData.traces);
+      await handler.processTrace(block_num, blockData.traces, block_time);
     }
 
     this.current_block = block_num;

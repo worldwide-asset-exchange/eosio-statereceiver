@@ -25,7 +25,9 @@ module.exports = async function deserializeDeep({ eosApi, types, type, data, opt
   /* We currently work on this version 'get_blocks_result_v0' only */
   if (result[0] === 'get_blocks_result_v0') {
     const deserializedData = result[1];
-
+    if (deserializedData.block) {
+      deserializedData.block = deserialize(types, 'signed_block', deserializedData.block);
+    }
     if (deserializedData.this_block) {
       if (deserializeTraces) {
         deserializedData.traces = deserialize(

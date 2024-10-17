@@ -17,7 +17,7 @@ const sr = new StateReceiver({
 sr.registerTraceHandler({
   contractName: 'eosio.token',
   actionName: 'transfer',
-  async processTrace(block_num, traces) {
+  async processTrace(block_num, traces, block_time) {
     //
   },
 });
