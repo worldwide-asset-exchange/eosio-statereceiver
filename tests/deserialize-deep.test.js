@@ -51,7 +51,7 @@ describe('deserialize-deep', () => {
     expect(blockData).toEqual([
       'get_blocks_result_v0',
       {
-        block: expect.any(Uint8Array),
+        block: expect.objectContaining({ timestamp: '2022-05-23T16:05:42.000' }),
         deltas: null,
         head: {
           block_id: '027FA37A49FEDD8E18413942E5E12228545A997F22F0BD3A9D7EC02C045F08FC',
