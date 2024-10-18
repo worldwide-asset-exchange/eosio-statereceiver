@@ -92,7 +92,7 @@ describe('state receiver', () => {
       'get_blocks_request_v0',
       {
         end_block_num: 4294967295,
-        fetch_block: false,
+        fetch_block: true,
         fetch_deltas: false,
         fetch_traces: false,
         have_positions: [],
@@ -118,7 +118,7 @@ describe('state receiver', () => {
       'get_blocks_request_v0',
       {
         end_block_num: 4294967295,
-        fetch_block: false,
+        fetch_block: true,
         fetch_deltas: false,
         fetch_traces: false,
         have_positions: [],
