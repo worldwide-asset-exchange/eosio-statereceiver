@@ -223,7 +223,7 @@ class StateReceiver {
       max_messages_in_flight: +this.config.maxMessagesInFlight || 5,
       have_positions: [],
       irreversible_only: true,
-      fetch_block: false,
+      fetch_block: true,
       fetch_traces: this.traceHandlers.length > 0,
       fetch_deltas: false,
     };
