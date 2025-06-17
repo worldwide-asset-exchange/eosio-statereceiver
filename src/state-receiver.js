@@ -181,6 +181,12 @@ class StateReceiver {
           this.sendAck(1);
         }
 
+        if (this.debuging) {
+          this.logger.info(
+            `onMessage: add message to queue ${this.serializedMessageQueue.length} ${this.pauseAck}`
+          );
+        }
+
         // queuing data
         this.serializedMessageQueue.push(data);
 
@@ -262,7 +268,7 @@ class StateReceiver {
     this.processCount += 1;
     if (this.debuging) {
       this.logger.info(
-        `Enter processMessageData ${this.processCount}, ${this.processingMessageData}`
+        `Enter processMessageData ${this.processCount}, ${this.processingMessageData}, ${serializedMessageQueue.length}`
       );
     }
     this.processingMessageData = true;
@@ -275,6 +281,11 @@ class StateReceiver {
       };
 
       while (serializedMessageQueue.length > 0) {
+        if (this.debuging) {
+          this.logger.info(
+            `Processing message loop ${this.processCount}, ${this.processingMessageData}, ${serializedMessageQueue.length}`
+          );
+        }
         const serializedMessage = serializedMessageQueue.shift();
 
         if (this.pauseAck && serializedMessageQueue.length < 2) {
@@ -285,6 +296,9 @@ class StateReceiver {
           this.sendAck(1);
         }
 
+        if (this.debuging) {
+          this.logger.info(`Start deserialize block data`);
+        }
         const blockData = await deserializeDeep({
           eosApi: this.eosApi,
           types: this.types,
@@ -336,6 +350,10 @@ class StateReceiver {
 
     const block_num = +blockData.this_block.block_num;
     const block_time = blockData.block.timestamp;
+
+    if (this.debuging) {
+      this.logger.info(`deliverDeserializedBlock ${block_num}`);
+    }
 
     for (const handler of this.traceHandlers) {
       await handler.processTrace(block_num, blockData.traces, block_time);
