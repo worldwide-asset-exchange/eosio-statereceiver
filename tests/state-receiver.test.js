@@ -1048,6 +1048,14 @@ describe('state receiver', () => {
         587: 0,
       };
       const blockData = {
+        head: {
+          block_num: 361300,
+          block_id: '00058354314367D0A1D3FD9B2C4241279B9549A2CB8904B091DEE6F07BAA116A',
+        },
+        last_irreversible: {
+          block_num: 361299,
+          block_id: '000583539A9119814C7AA83B77504423B810943E95AB3EF0FA419F4ACDCC2DB9',
+        },
         this_block: {
           block_num: 99,
         },
@@ -1071,8 +1079,20 @@ describe('state receiver', () => {
 
       await sr.deliverDeserializedBlock(blockData);
       expect(logger.warn).not.toBeCalled();
-      expect(processTrace).toBeCalledWith(sr.current_block, blockData.traces, sr.block_time);
-      expect(processTrace2).toBeCalledWith(sr.current_block, blockData.traces, sr.block_time);
+      expect(processTrace).toBeCalledWith(
+        sr.current_block,
+        blockData.traces,
+        sr.block_time,
+        blockData.head.block_num,
+        blockData.last_irreversible.block_num
+      );
+      expect(processTrace2).toBeCalledWith(
+        sr.current_block,
+        blockData.traces,
+        sr.block_time,
+        blockData.head.block_num,
+        blockData.last_irreversible.block_num
+      );
     });
   });
 

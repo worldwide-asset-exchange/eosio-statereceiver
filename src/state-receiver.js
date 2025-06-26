@@ -350,13 +350,21 @@ class StateReceiver {
 
     const block_num = +blockData.this_block.block_num;
     const block_time = blockData.block.timestamp;
+    const head_block_num = blockData.head.block_num;
+    const last_irreversible_block_num = blockData.last_irreversible.block_num;
 
     if (this.debuging) {
       this.logger.info(`deliverDeserializedBlock ${block_num}`);
     }
 
     for (const handler of this.traceHandlers) {
-      await handler.processTrace(block_num, blockData.traces, block_time);
+      await handler.processTrace(
+        block_num,
+        blockData.traces,
+        block_time,
+        head_block_num,
+        last_irreversible_block_num
+      );
     }
 
     this.current_block = block_num;
