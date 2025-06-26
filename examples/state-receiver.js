@@ -7,7 +7,7 @@ const sr = new StateReceiver({
     warn: (...m) => console.warn(...m),
     error: (...m) => console.error(...m),
   },
-  startBlock: 30000,
+  startBlock: 361314,
   socketAddresses: [process.env.SOCKET_ADDRESS || 'ws://localhost:8080'],
   eosEndpoint: process.env.EOS_ENDPOINT || 'http://localhost:8888',
   deserializerActions: [
@@ -45,12 +45,14 @@ let lastBlock = 0;
 const debugging = process.env.DEBUG_STATE_RECEIVER == 1; // set to true to run the debug logic below
 
 sr.registerTraceHandler({
-  async processTrace(block_num, traces, block_time) {
+  async processTrace(block_num, traces, block_time, head_block_num, last_irreversible_block_num) {
     await sleep(1000);
 
     if (debugging) {
       console.log(`New block ${block_num}`);
       console.log(`Block time ${block_time}`);
+      console.log(`Head block num ${head_block_num}`);
+      console.log(`Last irreversible block num ${last_irreversible_block_num}`);
       if (block_num !== lastBlock + 1) {
         console.log(`ERROR: Out of order block ${block_num}. Last block ${lastBlock}`);
       }
