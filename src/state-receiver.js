@@ -30,12 +30,6 @@ class StateReceiver {
   connection;
 
   /**
-   * Pausing the ack to state node if queue is full
-   * @type {boolean}
-   */
-  pauseAck;
-
-  /**
    * @type {EosApi}
    */
   eosApi;
@@ -51,6 +45,11 @@ class StateReceiver {
   deserializerActionSet;
 
   /**
+   * @type {number}
+   */
+  inflightMessageCount = 0;
+
+  /**
    * @param {Object} config - StateReceiver configuration
    * @param {number} config.startBlock - default 0,
    * @param {number} config.endBlock - default 0xffffffff
@@ -60,7 +59,6 @@ class StateReceiver {
    * @param {object} config.logger - default is console
    * @param {function} config.onError - error handler
    * @param {number} config.maxQueueSize - max buffer message size, default 100
-   * @param {number} config.maxMessagesInFlight - Number of message in flight when request block data from the state node - default 5
    * @param {string[]} config.deserializerActions - list of actions to be deserialized. Ex: ['eosio.token::transfer', 'bridge.wax::reqnft']
    */
   constructor(config) {
@@ -93,7 +91,6 @@ class StateReceiver {
   }
 
   init() {
-    this.pauseAck = false;
     this.serializedMessageQueue = [];
     // this.processingMessageData = false;
 
@@ -177,23 +174,15 @@ class StateReceiver {
       if (!this.abi) {
         this.receivedAbi(data);
       } else {
-        if (!this.pauseAck) {
-          this.sendAck(1);
-        }
+        this.inflightMessageCount--;
+        this.sendAck();
 
         if (this.debuging) {
-          this.logger.info(
-            `onMessage: add message to queue ${this.serializedMessageQueue.length} ${this.pauseAck}`
-          );
+          this.logger.info(`onMessage: add message to queue ${this.serializedMessageQueue.length}`);
         }
 
         // queuing data
         this.serializedMessageQueue.push(data);
-
-        if (this.serializedMessageQueue.length >= this.config.maxQueueSize) {
-          this.logger.info(`The max queue size is reached; pause the ACK and wait for processing.`);
-          this.pauseAck = true;
-        }
 
         // Intentionally, not to block the receiving message from state node.
         // no "await" here.
@@ -226,7 +215,7 @@ class StateReceiver {
     const args = {
       start_block_num: startBlock,
       end_block_num: parseInt(this.endBlock),
-      max_messages_in_flight: +this.config.maxMessagesInFlight || 5,
+      max_messages_in_flight: this.config.maxQueueSize,
       have_positions: [],
       irreversible_only: true,
       fetch_block: true,
@@ -238,14 +227,22 @@ class StateReceiver {
       `Requesting blocks, Start : ${args.start_block_num}, End : ${args.end_block_num}, Max Messages In Flight : ${args.max_messages_in_flight}`
     );
     this.send(['get_blocks_request_v0', args]);
+    this.inflightMessageCount = args.max_messages_in_flight;
   }
 
   requestStatus() {
     this.send(['get_status_request_v0', {}]);
   }
 
-  sendAck(num_messages) {
-    this.send(['get_blocks_ack_request_v0', { num_messages }]);
+  sendAck() {
+    const freeQueueSize =
+      this.config.maxQueueSize - this.inflightMessageCount - this.serializedMessageQueue.length;
+    if (freeQueueSize > 0) {
+      this.send(['get_blocks_ack_request_v0', { num_messages: freeQueueSize }]);
+      this.inflightMessageCount += freeQueueSize;
+    } else {
+      this.logger.info(`The max queue size is reached; pause the ACK and wait for processing.`);
+    }
   }
 
   send(request) {
@@ -288,12 +285,11 @@ class StateReceiver {
         }
         const serializedMessage = serializedMessageQueue.shift();
 
-        if (this.pauseAck && serializedMessageQueue.length < 2) {
+        if (serializedMessageQueue.length < 2) {
           this.logger.info(
-            `serializedMessageQueue.length is less than 2. Set pauseAck to false again.`
+            `serializedMessageQueue.length is less than 2. Send ACK to receive more blocks.`
           );
-          this.pauseAck = false;
-          this.sendAck(1);
+          this.sendAck();
         }
 
         if (this.debuging) {
@@ -314,13 +310,7 @@ class StateReceiver {
         }
       }
 
-      if (this.pauseAck) {
-        this.logger.info(
-          `The pauseAck state is not cleared since unknow reason. Set pauseAck to false again.`
-        );
-        this.pauseAck = false;
-        this.sendAck(1);
-      }
+      this.sendAck();
     } catch (err) {
       this._onError(err);
     } finally {
@@ -338,7 +328,6 @@ class StateReceiver {
       end: this.endBlock,
       current: this.current_block,
       serializedMessageQueueSize: this.serializedMessageQueue.length,
-      pauseAck: this.pauseAck,
     };
   }
 
