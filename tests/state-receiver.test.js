@@ -30,6 +30,7 @@ const defaultConfig = {
   socketAddresses: ['ws://localhost:8080'],
   eosEndpoint: 'http://localhost:8888',
   deserializerActions: ['eosio.token::transfer', 'bridge.wax::reqnft'],
+  maxQueueSize: 5,
 };
 
 function createStateReceiver(config) {
@@ -55,19 +56,50 @@ describe('state receiver', () => {
   });
 
   it('sendAck', () => {
-    const sr = createStateReceiver();
+    const sr = createStateReceiver({ maxQueueSize: 100 });
     sr.types = { abi: 'abi' };
     sr.connection = createConnection();
     sr.connection.connected = true;
     serialize.mockReturnValue('serialized message');
 
-    sr.sendAck(15);
+    sr.sendAck();
 
+    expect(serialize).toBeCalledTimes(1);
     expect(serialize).toBeCalledWith(sr.types, 'request', [
       'get_blocks_ack_request_v0',
-      { num_messages: 15 },
+      { num_messages: 100 },
     ]);
     expect(sr.connection.ws.send).toBeCalledWith('serialized message');
+
+    sr.sendAck();
+    expect(serialize).toBeCalledTimes(1);
+
+    sr.inflightMessageCount--;
+
+    sr.sendAck();
+    expect(serialize).toBeCalledTimes(2);
+    expect(serialize).toHaveBeenNthCalledWith(2, sr.types, 'request', [
+      'get_blocks_ack_request_v0',
+      { num_messages: 1 },
+    ]);
+
+    sr.serializedMessageQueue = ['msg1', 'msg2', 'msg3', 'msg4', 'msg5', 'msg6'];
+
+    sr.sendAck();
+    expect(serialize).toBeCalledTimes(2);
+
+    sr.inflightMessageCount = 10;
+
+    sr.sendAck();
+    expect(serialize).toBeCalledTimes(3);
+    expect(serialize).toHaveBeenNthCalledWith(3, sr.types, 'request', [
+      'get_blocks_ack_request_v0',
+      { num_messages: 100 - 10 - 6 },
+    ]);
+
+    // reset data after test
+    sr.inflightMessageCount = 0;
+    sr.serializedMessageQueue = [];
   });
 
   it('requestStatus', () => {
@@ -85,7 +117,8 @@ describe('state receiver', () => {
 
     sr.requestBlocks();
 
-    expect(logger.info).toBeCalledWith(
+    expect(logger.info).toHaveBeenNthCalledWith(
+      2,
       'Requesting blocks, Start : 20284880, End : 4294967295, Max Messages In Flight : 5'
     );
     expect(spy_send).toBeCalledWith([
@@ -146,7 +179,6 @@ describe('state receiver', () => {
     expect(sr.status()).toEqual({
       current: -1,
       end: '0xffffffff',
-      pauseAck: false,
       serializedMessageQueueSize: 0,
       start: 20284880,
     });
@@ -171,19 +203,17 @@ describe('state receiver', () => {
   it('init', () => {
     const sr = createStateReceiver();
     sr.serializedMessageQueue = [1];
-    sr.pauseAck = true;
 
     expect(sr).toEqual(
       expect.objectContaining({
-        pauseAck: true,
         serializedMessageQueue: [1],
       })
     );
     expect(sr.init()).toBeUndefined();
     expect(sr).toEqual(
       expect.objectContaining({
-        pauseAck: false,
         serializedMessageQueue: [],
+        inflightMessageCount: 0,
       })
     );
   });
@@ -290,7 +320,7 @@ describe('state receiver', () => {
       expect(spy_deliverDeserializedBlock).toHaveBeenNthCalledWith(1, { this_block: 'b1' });
       expect(spy_deliverDeserializedBlock).toHaveBeenNthCalledWith(2, { this_block: 'b2' });
 
-      expect(spy_sendAck).not.toBeCalled();
+      expect(spy_sendAck).toBeCalledTimes(3);
     });
 
     it('when reached the head block, the value of `this_block` is NULL', async () => {
@@ -357,40 +387,6 @@ describe('state receiver', () => {
       expect(logger.info).toHaveBeenCalledWith(
         'Reached the head of the chain: ["get_blocks_result_v0",{"block":null,"deltas":null,"head":{"block_id":"0294FBA794BC0BC2A795B4EB0998E1535E09F9E87D3EDE9BD7C086D34974BDBE","block_num":43318183},"last_irreversible":{"block_id":"0294FBA59FB66CD1698F43AEFCD4CC630A3B256FA66D3E9BE5974FA09F6C9A8A","block_num":43318181},"prev_block":null,"this_block":null,"traces":null}]'
       );
-    });
-
-    it('pauseAck is true 1', async () => {
-      const serializedMessageQueue = ['msg1', 'msg2'];
-      const sr = createStateReceiver({
-        eosApi: { name: 'eos-api' },
-      });
-      jest.spyOn(sr, 'deliverDeserializedBlock').mockResolvedValue();
-      const spy_sendAck = jest.spyOn(sr, 'sendAck').mockResolvedValue();
-
-      sr.pauseAck = true;
-      deserializeDeep.mockResolvedValue(['a', 'b1']);
-
-      await sr.processMessageData(serializedMessageQueue);
-
-      expect(spy_sendAck).toHaveBeenCalledTimes(1);
-      expect(spy_sendAck).toBeCalledWith(1);
-    });
-
-    it('pauseAck is true 2', async () => {
-      const serializedMessageQueue = ['msg1', 'msg2', 'msg3', 'msg4', 'msg5', 'msg6'];
-      const sr = createStateReceiver({
-        eosApi: { name: 'eos-api' },
-      });
-      jest.spyOn(sr, 'deliverDeserializedBlock').mockResolvedValue();
-      const spy_sendAck = jest.spyOn(sr, 'sendAck').mockResolvedValue();
-
-      sr.pauseAck = true;
-      deserializeDeep.mockResolvedValue(['a', 'b1']);
-
-      await sr.processMessageData(serializedMessageQueue);
-
-      expect(spy_sendAck).toHaveBeenCalledTimes(1);
-      expect(spy_sendAck).toBeCalledWith(1);
     });
   });
 
@@ -1128,7 +1124,7 @@ describe('state receiver', () => {
       sr.onMessage(data);
 
       expect(spy_receivedAbi).not.toBeCalled();
-      expect(spy_sendAck).toBeCalledWith(1);
+      expect(spy_sendAck).toBeCalledTimes(1);
       expect(sr.serializedMessageQueue).toEqual([data]);
       expect(spy_processMessageData).toBeCalledWith(sr.serializedMessageQueue);
     });
@@ -1154,7 +1150,7 @@ describe('state receiver', () => {
       expect(spy_receivedAbi).not.toBeCalled();
       expect(sr.serializedMessageQueue).toEqual([data]);
       expect(spy_processMessageData).toBeCalledWith(sr.serializedMessageQueue);
-      expect(spy_sendAck).toBeCalledWith(1);
+      expect(spy_sendAck).toBeCalledTimes(1);
       // expect(onError).toBeCalledWith(err);
       // expect(spy_onError).toBeCalledWith(err);
     });
