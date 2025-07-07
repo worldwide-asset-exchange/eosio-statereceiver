@@ -50,6 +50,11 @@ class StateReceiver {
   inflightMessageCount = 0;
 
   /**
+   * @type {boolean}
+   */
+  fetchBlockTime;
+
+  /**
    * @param {Object} config - StateReceiver configuration
    * @param {number} config.startBlock - default 0,
    * @param {number} config.endBlock - default 0xffffffff
@@ -59,6 +64,7 @@ class StateReceiver {
    * @param {object} config.logger - default is console
    * @param {function} config.onError - error handler
    * @param {number} config.maxQueueSize - max buffer message size, default 100
+   * @param {boolean} config.fetchBlockTime - fetch block time, default true
    * @param {string[]} config.deserializerActions - list of actions to be deserialized. Ex: ['eosio.token::transfer', 'bridge.wax::reqnft']
    */
   constructor(config) {
@@ -78,6 +84,7 @@ class StateReceiver {
     this.current_block = -1;
     this.types = null;
     this.processingMessageData = false;
+    this.fetchBlockTime = config.fetchBlockTime === undefined ? true : config.fetchBlockTime;
     this.init();
 
     if (!config.eosApi) {
@@ -218,7 +225,7 @@ class StateReceiver {
       max_messages_in_flight: this.config.maxQueueSize,
       have_positions: [],
       irreversible_only: true,
-      fetch_block: true,
+      fetch_block: this.fetchBlockTime,
       fetch_traces: this.traceHandlers.length > 0,
       fetch_deltas: false,
     };
@@ -338,7 +345,7 @@ class StateReceiver {
     }
 
     const block_num = +blockData.this_block.block_num;
-    const block_time = blockData.block.timestamp;
+    const block_time = blockData.block ? blockData.block.timestamp : null;
     const head_block_num = blockData.head.block_num;
     const last_irreversible_block_num = blockData.last_irreversible.block_num;
 

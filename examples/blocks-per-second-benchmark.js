@@ -1,6 +1,6 @@
 const StateReceiver = require('../src/state-receiver');
 
-const testDurationSeconds = parseInt(process.env.TEST_DURATION) || 60;
+const testDurationSeconds = parseInt(process.env.TEST_DURATION) || 120;
 const startBlock = parseInt(process.env.START_BLOCK) || 361314;
 
 const sr = new StateReceiver({
@@ -24,6 +24,7 @@ const sr = new StateReceiver({
   ],
   maxQueueSize: 50, // Increased for better throughput
   maxMessagesInFlight: 1000, // Increased for better throughput
+  fetchBlockTime: false,
 });
 
 let blockCount = 0;
