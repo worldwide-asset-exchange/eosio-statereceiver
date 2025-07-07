@@ -1,6 +1,6 @@
 {
   "name": "@waxio/eosio-statereceiver",
-  "version": "4.0.1-beta.1",
+  "version": "4.0.1-beta.2",
   "description": "State receiver module for connecting to the state history plugin",
   "main": "src/index.js",
   "files": [
