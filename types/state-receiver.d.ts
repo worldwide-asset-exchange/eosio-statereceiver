@@ -98,8 +98,10 @@ declare class StateReceiver {
     receivedAbi(data: any): void;
     requestBlocks(): void;
     requestStatus(): void;
-    sendAck(num_messages: any): void;
+    sendAck(): void;
+    sendAckOne(): void;
     send(request: any): void;
+    _maybeEmitSyncStats(result: any): void;
     /**
      *
      * @param {Array<Buffer>} serializedMessageQueue

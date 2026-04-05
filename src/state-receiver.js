@@ -95,6 +95,19 @@ class StateReceiver {
     }
     this.processCount = 0;
     this.debuging = process.env.DEBUG_STATE_RECEIVER == 1;
+    /** One get_blocks_ack per processed message (num_messages:1). Fixes throughput with some state-history nodes. */
+    this._ackEachBlock = process.env.WAX_STATE_HISTORY_ACK_EACH_BLOCK === '1';
+    if (this._ackEachBlock) {
+      this.logger.info(
+        '[statereceiver] WAX_STATE_HISTORY_ACK_EACH_BLOCK=1: per-message ACK pacing enabled.'
+      );
+    }
+    this._lastAckBackpressureLog = 0;
+    const statsEnv = (process.env.WAX_STATE_HISTORY_STATS_LOG || '').toLowerCase();
+    this._statsLog = statsEnv !== '0' && statsEnv !== 'false' && statsEnv !== 'off';
+    this._statsIntervalMs = parseInt(process.env.WAX_STATE_HISTORY_STATS_INTERVAL_MS || '1000', 10);
+    this._statsWindowStartHr = null;
+    this._statsBlocksInWindow = 0;
   }
 
   init() {
@@ -106,6 +119,9 @@ class StateReceiver {
      * it is going to to get a first message as ABI
      */
     this.abi = null;
+    this._lastAckBackpressureLog = 0;
+    this._statsWindowStartHr = null;
+    this._statsBlocksInWindow = 0;
   }
 
   start() {
@@ -182,7 +198,9 @@ class StateReceiver {
         this.receivedAbi(data);
       } else {
         this.inflightMessageCount--;
-        this.sendAck();
+        if (!this._ackEachBlock) {
+          this.sendAck();
+        }
 
         if (this.debuging) {
           this.logger.info(`onMessage: add message to queue ${this.serializedMessageQueue.length}`);
@@ -248,7 +266,46 @@ class StateReceiver {
       this.send(['get_blocks_ack_request_v0', { num_messages: freeQueueSize }]);
       this.inflightMessageCount += freeQueueSize;
     } else {
-      this.logger.info(`The max queue size is reached; pause the ACK and wait for processing.`);
+      const now = Date.now();
+      const throttleMs = parseInt(
+        process.env.WAX_STATE_HISTORY_ACK_BACKPRESSURE_LOG_MS || '5000',
+        10
+      );
+      if (
+        throttleMs <= 0 ||
+        !this._lastAckBackpressureLog ||
+        now - this._lastAckBackpressureLog >= throttleMs
+      ) {
+        this._lastAckBackpressureLog = now;
+        this.logger.debug(
+          `[statereceiver] ACK paused (backpressure): queue=${this.serializedMessageQueue.length} inflight=${this.inflightMessageCount} max=${this.config.maxQueueSize}`
+        );
+      }
+    }
+  }
+
+  sendAckOne() {
+    const freeQueueSize =
+      this.config.maxQueueSize - this.inflightMessageCount - this.serializedMessageQueue.length;
+    if (freeQueueSize > 0) {
+      this.send(['get_blocks_ack_request_v0', { num_messages: 1 }]);
+      this.inflightMessageCount += 1;
+    } else {
+      const now = Date.now();
+      const throttleMs = parseInt(
+        process.env.WAX_STATE_HISTORY_ACK_BACKPRESSURE_LOG_MS || '5000',
+        10
+      );
+      if (
+        throttleMs <= 0 ||
+        !this._lastAckBackpressureLog ||
+        now - this._lastAckBackpressureLog >= throttleMs
+      ) {
+        this._lastAckBackpressureLog = now;
+        this.logger.warn(
+          `[statereceiver] sendAckOne skipped (no window): queue=${this.serializedMessageQueue.length} inflight=${this.inflightMessageCount} max=${this.config.maxQueueSize}`
+        );
+      }
     }
   }
 
@@ -258,6 +315,51 @@ class StateReceiver {
     } else {
       this.logger.warn('Connection is not ready, cannot send message.');
     }
+  }
+
+  /**
+   * Rolling blocks/sec and ETA to chain head / LIB (irreversible stream).
+   * @param {object} result - get_blocks_result_v0 payload (blockData[1])
+   */
+  _maybeEmitSyncStats(result) {
+    if (!this._statsLog || !result?.this_block || !result.head || !result.last_irreversible) {
+      return;
+    }
+    const blockNum = +result.this_block.block_num;
+    const headNum = +result.head.block_num;
+    const irrNum = +result.last_irreversible.block_num;
+
+    const now = process.hrtime.bigint();
+    if (this._statsWindowStartHr == null) {
+      this._statsWindowStartHr = now;
+      this._statsBlocksInWindow = 0;
+    }
+    this._statsBlocksInWindow += 1;
+
+    const intervalNs = BigInt(this._statsIntervalMs) * 1_000_000n;
+    if (now - this._statsWindowStartHr < intervalNs) {
+      return;
+    }
+
+    const elapsedSec = Number(now - this._statsWindowStartHr) / 1e9;
+    const bps = elapsedSec > 0 ? this._statsBlocksInWindow / elapsedSec : 0;
+    const behindHead = Math.max(0, headNum - blockNum);
+    const behindIrr = Math.max(0, irrNum - blockNum);
+    const etaHeadSec = bps > 0.0001 && behindHead > 0 ? Math.round(behindHead / bps) : null;
+    const etaIrrSec = bps > 0.0001 && behindIrr > 0 ? Math.round(behindIrr / bps) : null;
+
+    this.logger.info(
+      `[statereceiver/stats] synced_block=${blockNum} head_block=${headNum} irr_block=${irrNum} blocks_per_sec=${bps.toFixed(
+        2
+      )} behind_head=${behindHead} behind_irr=${behindIrr} eta_head_sec=${
+        etaHeadSec == null ? 'n/a' : etaHeadSec
+      } eta_irr_sec=${etaIrrSec == null ? 'n/a' : etaIrrSec} window_blocks=${
+        this._statsBlocksInWindow
+      }`
+    );
+
+    this._statsWindowStartHr = now;
+    this._statsBlocksInWindow = 0;
   }
 
   /**
@@ -292,10 +394,7 @@ class StateReceiver {
         }
         const serializedMessage = serializedMessageQueue.shift();
 
-        if (serializedMessageQueue.length < 2) {
-          this.logger.info(
-            `serializedMessageQueue.length is less than 2. Send ACK to receive more blocks.`
-          );
+        if (!this._ackEachBlock && serializedMessageQueue.length < 2) {
           this.sendAck();
         }
 
@@ -312,18 +411,31 @@ class StateReceiver {
 
         if (blockData[1] && blockData[1].this_block) {
           await this.deliverDeserializedBlock(blockData[1]);
+          this._maybeEmitSyncStats(blockData[1]);
         } else {
           this.logger.info(`Reached the head of the chain: ${JSON.stringify(blockData)}`);
         }
+
+        if (this._ackEachBlock) {
+          this.sendAckOne();
+        }
       }
 
-      this.sendAck();
+      if (!this._ackEachBlock) {
+        this.sendAck();
+      }
     } catch (err) {
       this._onError(err);
     } finally {
       this.processingMessageData = false;
       if (this.debuging) {
         this.logger.info(`Exit processMessageData ${this.processCount}`);
+      }
+      const q = serializedMessageQueue;
+      if (q.length > 0) {
+        setImmediate(() => {
+          this.processMessageData(q).catch((err) => this._onError(err));
+        });
       }
     }
     // this.logger.debug(`Processing message data stop.`);
