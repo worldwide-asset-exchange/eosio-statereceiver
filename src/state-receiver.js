@@ -103,6 +103,11 @@ class StateReceiver {
       );
     }
     this._lastAckBackpressureLog = 0;
+    this._ackBackpressureLogMs = parseInt(
+      process.env.WAX_STATE_HISTORY_ACK_BACKPRESSURE_LOG_MS || '5000',
+      10
+    );
+    this._drainBackoffMs = parseInt(process.env.WAX_STATE_HISTORY_DRAIN_BACKOFF_MS || '250', 10);
     const statsEnv = (process.env.WAX_STATE_HISTORY_STATS_LOG || '').toLowerCase();
     this._statsLog = statsEnv !== '0' && statsEnv !== 'false' && statsEnv !== 'off';
     this._statsIntervalMs = parseInt(process.env.WAX_STATE_HISTORY_STATS_INTERVAL_MS || '1000', 10);
@@ -259,6 +264,19 @@ class StateReceiver {
     this.send(['get_status_request_v0', {}]);
   }
 
+  _logBackpressure(level, msg) {
+    const throttleMs = this._ackBackpressureLogMs;
+    const now = Date.now();
+    if (
+      throttleMs <= 0 ||
+      !this._lastAckBackpressureLog ||
+      now - this._lastAckBackpressureLog >= throttleMs
+    ) {
+      this._lastAckBackpressureLog = now;
+      this.logger[level](msg);
+    }
+  }
+
   sendAck() {
     const freeQueueSize =
       this.config.maxQueueSize - this.inflightMessageCount - this.serializedMessageQueue.length;
@@ -266,21 +284,10 @@ class StateReceiver {
       this.send(['get_blocks_ack_request_v0', { num_messages: freeQueueSize }]);
       this.inflightMessageCount += freeQueueSize;
     } else {
-      const now = Date.now();
-      const throttleMs = parseInt(
-        process.env.WAX_STATE_HISTORY_ACK_BACKPRESSURE_LOG_MS || '5000',
-        10
+      this._logBackpressure(
+        'debug',
+        `[statereceiver] ACK paused (backpressure): queue=${this.serializedMessageQueue.length} inflight=${this.inflightMessageCount} max=${this.config.maxQueueSize}`
       );
-      if (
-        throttleMs <= 0 ||
-        !this._lastAckBackpressureLog ||
-        now - this._lastAckBackpressureLog >= throttleMs
-      ) {
-        this._lastAckBackpressureLog = now;
-        this.logger.debug(
-          `[statereceiver] ACK paused (backpressure): queue=${this.serializedMessageQueue.length} inflight=${this.inflightMessageCount} max=${this.config.maxQueueSize}`
-        );
-      }
     }
   }
 
@@ -291,21 +298,10 @@ class StateReceiver {
       this.send(['get_blocks_ack_request_v0', { num_messages: 1 }]);
       this.inflightMessageCount += 1;
     } else {
-      const now = Date.now();
-      const throttleMs = parseInt(
-        process.env.WAX_STATE_HISTORY_ACK_BACKPRESSURE_LOG_MS || '5000',
-        10
+      this._logBackpressure(
+        'warn',
+        `[statereceiver] sendAckOne skipped (no window): queue=${this.serializedMessageQueue.length} inflight=${this.inflightMessageCount} max=${this.config.maxQueueSize}`
       );
-      if (
-        throttleMs <= 0 ||
-        !this._lastAckBackpressureLog ||
-        now - this._lastAckBackpressureLog >= throttleMs
-      ) {
-        this._lastAckBackpressureLog = now;
-        this.logger.warn(
-          `[statereceiver] sendAckOne skipped (no window): queue=${this.serializedMessageQueue.length} inflight=${this.inflightMessageCount} max=${this.config.maxQueueSize}`
-        );
-      }
     }
   }
 
@@ -378,6 +374,7 @@ class StateReceiver {
       );
     }
     this.processingMessageData = true;
+    let drainErrored = false;
 
     // this.logger.debug(`Processing message data...`);
     try {
@@ -425,6 +422,7 @@ class StateReceiver {
         this.sendAck();
       }
     } catch (err) {
+      drainErrored = true;
       this._onError(err);
     } finally {
       this.processingMessageData = false;
@@ -433,9 +431,15 @@ class StateReceiver {
       }
       const q = serializedMessageQueue;
       if (q.length > 0) {
-        setImmediate(() => {
+        const reentry = () => {
           this.processMessageData(q).catch((err) => this._onError(err));
-        });
+        };
+        if (drainErrored) {
+          // back off after errors to avoid hot-looping on a malformed/poison block
+          setTimeout(reentry, this._drainBackoffMs);
+        } else {
+          setImmediate(reentry);
+        }
       }
     }
     // this.logger.debug(`Processing message data stop.`);

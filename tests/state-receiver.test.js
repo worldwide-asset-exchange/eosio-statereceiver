@@ -390,6 +390,115 @@ describe('state receiver', () => {
     });
   });
 
+  describe('sendAckOne', () => {
+    it('sends one-message ack when window is free', () => {
+      const sr = createStateReceiver({ maxQueueSize: 5 });
+      sr.types = { abi: 'abi' };
+      sr.connection = createConnection();
+      sr.connection.connected = true;
+      sr.inflightMessageCount = 0;
+      sr.serializedMessageQueue = [];
+      serialize.mockReturnValue('serialized');
+
+      sr.sendAckOne();
+
+      expect(serialize).toBeCalledWith(sr.types, 'request', [
+        'get_blocks_ack_request_v0',
+        { num_messages: 1 },
+      ]);
+      expect(sr.inflightMessageCount).toBe(1);
+    });
+
+    it('warns and skips when window is exhausted', () => {
+      const sr = createStateReceiver({ maxQueueSize: 1 });
+      sr.types = { abi: 'abi' };
+      sr.connection = createConnection();
+      sr.connection.connected = true;
+      sr.inflightMessageCount = 1;
+      sr.serializedMessageQueue = [];
+
+      sr.sendAckOne();
+
+      expect(serialize).not.toBeCalled();
+      expect(logger.warn).toBeCalledWith(
+        expect.stringContaining('[statereceiver] sendAckOne skipped')
+      );
+    });
+
+    it('throttles repeated backpressure logs within the configured window', () => {
+      const sr = createStateReceiver({ maxQueueSize: 1 });
+      sr.connection = createConnection();
+      sr.connection.connected = true;
+      sr._ackBackpressureLogMs = 60_000;
+      sr.inflightMessageCount = 1;
+
+      sr.sendAckOne();
+      sr.sendAckOne();
+      sr.sendAckOne();
+
+      expect(logger.warn).toBeCalledTimes(1);
+    });
+  });
+
+  describe('processMessageData per-block ACK', () => {
+    it('sends one ack per processed block when WAX_STATE_HISTORY_ACK_EACH_BLOCK is enabled', async () => {
+      const prev = process.env.WAX_STATE_HISTORY_ACK_EACH_BLOCK;
+      process.env.WAX_STATE_HISTORY_ACK_EACH_BLOCK = '1';
+      try {
+        const sr = createStateReceiver({ eosApi: { name: 'eos-api' } });
+        jest.spyOn(sr, 'deliverDeserializedBlock').mockResolvedValue();
+        const spy_sendAck = jest.spyOn(sr, 'sendAck').mockImplementation(() => {});
+        const spy_sendAckOne = jest.spyOn(sr, 'sendAckOne').mockImplementation(() => {});
+
+        deserializeDeep.mockResolvedValueOnce(['a', { this_block: 'b1' }]);
+        deserializeDeep.mockResolvedValueOnce(['a', { this_block: 'b2' }]);
+
+        await sr.processMessageData(['msg1', 'msg2']);
+
+        expect(spy_sendAckOne).toBeCalledTimes(2);
+        expect(spy_sendAck).not.toBeCalled();
+      } finally {
+        if (prev === undefined) delete process.env.WAX_STATE_HISTORY_ACK_EACH_BLOCK;
+        else process.env.WAX_STATE_HISTORY_ACK_EACH_BLOCK = prev;
+      }
+    });
+  });
+
+  describe('processMessageData drain continuation', () => {
+    it('does not schedule re-entry when queue is empty after a clean drain', async () => {
+      const sr = createStateReceiver({ eosApi: { name: 'eos-api' } });
+      jest.spyOn(sr, 'deliverDeserializedBlock').mockResolvedValue();
+      jest.spyOn(sr, 'sendAck').mockImplementation(() => {});
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+      const setImmediateSpy = jest.spyOn(global, 'setImmediate');
+      deserializeDeep.mockResolvedValue(['a', { this_block: 'b' }]);
+
+      await sr.processMessageData(['msg1']);
+
+      expect(setTimeoutSpy).not.toBeCalled();
+      expect(setImmediateSpy).not.toBeCalled();
+    });
+
+    it('schedules a setTimeout backoff (not setImmediate) when processing errored mid-queue', async () => {
+      const sr = createStateReceiver({ eosApi: { name: 'eos-api' } });
+      sr._drainBackoffMs = 100;
+      jest.spyOn(sr, 'sendAck').mockImplementation(() => {});
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+      const setImmediateSpy = jest.spyOn(global, 'setImmediate');
+
+      deserializeDeep.mockImplementationOnce(() => {
+        throw new Error('boom');
+      });
+
+      const queue = ['msg1', 'msg2'];
+      await sr.processMessageData(queue);
+
+      // Loop bailed in catch; queue still has 'msg2', so backoff timer is scheduled.
+      expect(setTimeoutSpy).toBeCalledWith(expect.any(Function), 100);
+      expect(setImmediateSpy).not.toBeCalled();
+    });
+  });
+
   describe('registerTraceHandler', () => {
     it('should register a handler', () => {
       const sr = createStateReceiver();
