@@ -65,3 +65,16 @@ Received 946.5 B/s; Queue size: 39
 25264 returnvalue::returnstring return value "test test action return string"
 ...
 ```
+
+## Tuning environment variables
+
+These are all optional. Defaults preserve historical behavior.
+
+| Variable                                    | Default | Purpose                                                                                                                                                                                                 |
+| ------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WAX_STATE_HISTORY_ACK_EACH_BLOCK`          | _unset_ | Set to `1` to send one `get_blocks_ack_request_v0` per processed block (`num_messages: 1`) instead of acking the whole free window. Useful against state-history nodes that misbehave with batched ACK. |
+| `WAX_STATE_HISTORY_ACK_BACKPRESSURE_LOG_MS` | `5000`  | Throttle (ms) for the "ACK paused (backpressure)" log emitted when the queue is full. Set `0` to log every occurrence.                                                                                  |
+| `WAX_STATE_HISTORY_DRAIN_BACKOFF_MS`        | `250`   | Delay (ms) before re-entering `processMessageData` after an error during drain. Prevents a hot error loop on a malformed/poison block.                                                                  |
+| `WAX_STATE_HISTORY_STATS_LOG`               | `on`    | Set to `0`, `false`, or `off` to suppress the rolling sync-stats line (`blocks_per_sec`, `behind_head`, `eta_*`).                                                                                       |
+| `WAX_STATE_HISTORY_STATS_INTERVAL_MS`       | `1000`  | Window (ms) over which sync stats are aggregated and emitted.                                                                                                                                           |
+| `DEBUG_STATE_RECEIVER`                      | _unset_ | Set to `1` for verbose per-message debug logs.                                                                                                                                                          |
