@@ -1289,3 +1289,74 @@ describe('state receiver', () => {
     });
   });
 });
+
+/**
+ * Regression tests for the reconnect latch.
+ *
+ * Production defect (2026-09-06 -> 2026-09-08, 55.9h silent outage of account-claim-listener):
+ * start() used to return early whenever processingMessageData was true, re-arming a 1s timer and
+ * never dialling. That flag is cleared only by processMessageData()'s finally, which never runs if
+ * an await inside it fails to settle -- and neither deserializeDeep (network I/O) nor
+ * deliverDeserializedBlock (consumer code) is bounded by a timeout. A socket death mid-batch
+ * therefore wedged the receiver permanently while the process stayed alive and healthy-looking.
+ */
+describe('reconnect latch (regression)', () => {
+  test('start() connects even when a message batch is still in flight', () => {
+    const sr = createStateReceiver({});
+    // Simulate a batch that began and whose awaits never settled.
+    sr.processingMessageData = true;
+
+    sr.start();
+
+    // The whole defect: this used to be 0, forever.
+    expect(sr.connection).toBeTruthy();
+    expect(sr.connection.connect).toHaveBeenCalledTimes(1);
+    expect(sr.processingMessageData).toBe(false);
+  });
+
+  test('a superseded in-flight batch does not deliver blocks after a reconnect', async () => {
+    const sr = createStateReceiver({});
+    sr.types = {};
+    sr.deliverDeserializedBlock = jest.fn().mockResolvedValue(undefined);
+
+    // deserializeDeep resolves only AFTER a reconnect has happened, mimicking a slow network read
+    // that completes once the socket it belonged to is already gone.
+    deserializeDeep.mockImplementation(async () => {
+      sr.start(); // the reconnect lands mid-batch
+      return [null, { this_block: { block_num: 1 } }];
+    });
+
+    await sr.processMessageData([Buffer.from('a'), Buffer.from('b')]);
+
+    // The stale batch must abandon itself rather than write results against the new connection.
+    expect(sr.deliverDeserializedBlock).not.toHaveBeenCalled();
+  });
+
+  test('a superseded batch does not clear the live invocation flag', async () => {
+    const sr = createStateReceiver({});
+    sr.types = {};
+    sr.deliverDeserializedBlock = jest.fn().mockResolvedValue(undefined);
+
+    deserializeDeep.mockImplementation(async () => {
+      sr.start();
+      // start() cleared the flag; a NEW batch then takes ownership of it.
+      sr.processingMessageData = true;
+      return [null, { this_block: { block_num: 1 } }];
+    });
+
+    await sr.processMessageData([Buffer.from('a')]);
+
+    // The abandoned batch must leave the newer owner's flag intact.
+    expect(sr.processingMessageData).toBe(true);
+  });
+
+  test('repeated reconnects always dial (no 1s no-op loop)', () => {
+    const sr = createStateReceiver({});
+    for (let i = 0; i < 5; i++) {
+      sr.processingMessageData = true; // as if every cycle died mid-batch
+      sr.start();
+      expect(sr.connection.connect).toHaveBeenCalledTimes(1);
+    }
+    expect(sr._connectionEpoch).toBe(5);
+  });
+});

@@ -6,6 +6,7 @@ export = StateReceiver;
  * @callback ProcessTrace
  * @param {number} block_num
  * @param {Array<*>} traces
+ * @param {string} block_time
  * @returns {Promise<void>}
  */
 /**
@@ -25,7 +26,7 @@ declare class StateReceiver {
      * @param {object} config.logger - default is console
      * @param {function} config.onError - error handler
      * @param {number} config.maxQueueSize - max buffer message size, default 100
-     * @param {number} config.maxMessagesInFlight - Number of message in flight when request block data from the state node - default 5
+     * @param {boolean} config.fetchBlockTime - fetch block time, default true
      * @param {string[]} config.deserializerActions - list of actions to be deserialized. Ex: ['eosio.token::transfer', 'bridge.wax::reqnft']
      */
     constructor(config: {
@@ -37,18 +38,13 @@ declare class StateReceiver {
         logger: object;
         onError: Function;
         maxQueueSize: number;
-        maxMessagesInFlight: number;
+        fetchBlockTime: boolean;
         deserializerActions: string[];
     });
     /**
      * @type {Connection}
      */
     connection: Connection;
-    /**
-     * Pausing the ack to state node if queue is full
-     * @type {boolean}
-     */
-    pauseAck: boolean;
     /**
      * @type {EosApi}
      */
@@ -61,6 +57,14 @@ declare class StateReceiver {
      * @type {Set<string>}
      */
     deserializerActionSet: Set<string>;
+    /**
+     * @type {number}
+     */
+    inflightMessageCount: number;
+    /**
+     * @type {boolean}
+     */
+    fetchBlockTime: boolean;
     logger: any;
     traceHandlers: any[];
     config: Readonly<{
@@ -72,15 +76,32 @@ declare class StateReceiver {
         logger: object;
         onError: Function;
         maxQueueSize: number;
-        maxMessagesInFlight: number;
+        fetchBlockTime: boolean;
         deserializerActions: string[];
     }>;
     startBlock: number;
     endBlock: string | number;
     current_block: number;
     types: Map<string, Serialize.Type>;
-    init(): void;
     processingMessageData: boolean;
+    /**
+     * Incremented on every start()/reconnect. A processMessageData() invocation captures this
+     * value and abandons itself as soon as it no longer matches, so a batch belonging to a dead
+     * connection can never deliver blocks, ACK, or clear the in-progress flag of a live one.
+     */
+    _connectionEpoch: number;
+    processCount: number;
+    debuging: boolean;
+    /** One get_blocks_ack per processed message (num_messages:1). Fixes throughput with some state-history nodes. */
+    _ackEachBlock: boolean;
+    _lastAckBackpressureLog: number;
+    _ackBackpressureLogMs: number;
+    _drainBackoffMs: number;
+    _statsLog: boolean;
+    _statsIntervalMs: number;
+    _statsWindowStartHr: bigint;
+    _statsBlocksInWindow: number;
+    init(): void;
     /**
      * This needs to be reset so that the message handler know that
      * it is going to to get a first message as ABI
@@ -98,10 +119,15 @@ declare class StateReceiver {
     receivedAbi(data: any): void;
     requestBlocks(): void;
     requestStatus(): void;
+    _logBackpressure(level: any, msg: any): void;
     sendAck(): void;
     sendAckOne(): void;
     send(request: any): void;
-    _maybeEmitSyncStats(result: any): void;
+    /**
+     * Rolling blocks/sec and ETA to chain head / LIB (irreversible stream).
+     * @param {object} result - get_blocks_result_v0 payload (blockData[1])
+     */
+    _maybeEmitSyncStats(result: object): void;
     /**
      *
      * @param {Array<Buffer>} serializedMessageQueue
@@ -113,7 +139,6 @@ declare class StateReceiver {
         end: string | number;
         current: number;
         serializedMessageQueueSize: number;
-        pauseAck: boolean;
     };
     deliverDeserializedBlock(blockData: any): Promise<void>;
     _onError(e: any): void;
@@ -138,5 +163,5 @@ type TraceHandler = {
      */
     processTrace: ProcessTrace;
 };
-type ProcessTrace = (block_num: number, traces: Array<any>) => Promise<void>;
+type ProcessTrace = (block_num: number, traces: Array<any>, block_time: string) => Promise<void>;
 //# sourceMappingURL=state-receiver.d.ts.map
