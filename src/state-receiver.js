@@ -84,6 +84,12 @@ class StateReceiver {
     this.current_block = -1;
     this.types = null;
     this.processingMessageData = false;
+    /**
+     * Incremented on every start()/reconnect. A processMessageData() invocation captures this
+     * value and abandons itself as soon as it no longer matches, so a batch belonging to a dead
+     * connection can never deliver blocks, ACK, or clear the in-progress flag of a live one.
+     */
+    this._connectionEpoch = 0;
     this.fetchBlockTime = config.fetchBlockTime === undefined ? true : config.fetchBlockTime;
     this.init();
 
@@ -117,7 +123,9 @@ class StateReceiver {
 
   init() {
     this.serializedMessageQueue = [];
-    // this.processingMessageData = false;
+    // Defence in depth. start() already clears this before calling init(); keeping it here means
+    // any other caller of init() also gets a clean slate rather than inheriting a stuck flag.
+    this.processingMessageData = false;
 
     /**
      * This needs to be reset so that the message handler know that
@@ -132,13 +140,26 @@ class StateReceiver {
   start() {
     this.logger.info(`==== Starting the receiver.`);
 
-    if (this.processingMessageData == true) {
-      if (this.debuging) {
-        this.logger.info('Wait for processingMessageData to finish!');
-      }
-      let start = this.start.bind(this);
-      setTimeout(start, 1000);
-      return;
+    /**
+     * A (re)start SUPERSEDES any in-flight batch rather than waiting for it.
+     *
+     * This used to `return` here whenever processingMessageData was true, re-arming a 1s timer.
+     * That flag is only cleared by processMessageData()'s `finally`, which never runs if one of
+     * its awaits never settles (deserializeDeep performs network I/O; deliverDeserializedBlock is
+     * consumer code -- neither is bounded by a timeout). A socket death mid-batch therefore
+     * latched the receiver into a permanent 1s no-op loop: it logged "Starting the receiver"
+     * forever and never dialled again. Observed in production as a 55.9h silent outage.
+     *
+     * Bumping the epoch invalidates the in-flight batch (see processMessageData), so it is safe to
+     * clear the flag and reconnect immediately.
+     */
+    this._connectionEpoch += 1;
+    if (this.processingMessageData) {
+      this.logger.warn(
+        `Restarting while a message batch was in flight (epoch ${this._connectionEpoch}); ` +
+          `abandoning it. Its connection is gone and its results are no longer valid.`
+      );
+      this.processingMessageData = false;
     }
     this.init();
 
@@ -374,6 +395,9 @@ class StateReceiver {
       );
     }
     this.processingMessageData = true;
+    const myEpoch = this._connectionEpoch;
+    /** True once a reconnect has superseded this batch; see start(). */
+    const superseded = () => this._connectionEpoch !== myEpoch;
     let drainErrored = false;
 
     // this.logger.debug(`Processing message data...`);
@@ -388,6 +412,12 @@ class StateReceiver {
           this.logger.info(
             `Processing message loop ${this.processCount}, ${this.processingMessageData}, ${serializedMessageQueue.length}`
           );
+        }
+        if (superseded()) {
+          this.logger.warn(
+            `Abandoning message batch: superseded by a reconnect (epoch ${myEpoch} -> ${this._connectionEpoch}).`
+          );
+          return;
         }
         const serializedMessage = serializedMessageQueue.shift();
 
@@ -405,6 +435,13 @@ class StateReceiver {
           data: serializedMessage,
           options: deserializingOptions,
         });
+
+        if (superseded()) {
+          this.logger.warn(
+            `Abandoning message batch: superseded by a reconnect (epoch ${myEpoch} -> ${this._connectionEpoch}).`
+          );
+          return;
+        }
 
         if (blockData[1] && blockData[1].this_block) {
           await this.deliverDeserializedBlock(blockData[1]);
@@ -425,11 +462,15 @@ class StateReceiver {
       drainErrored = true;
       this._onError(err);
     } finally {
-      this.processingMessageData = false;
+      // Only release the flag if it is still OURS. A superseded batch must not clear the flag of
+      // the live invocation that replaced it.
+      if (!superseded()) {
+        this.processingMessageData = false;
+      }
       if (this.debuging) {
         this.logger.info(`Exit processMessageData ${this.processCount}`);
       }
-      const q = serializedMessageQueue;
+      const q = superseded() ? [] : serializedMessageQueue;
       if (q.length > 0) {
         const reentry = () => {
           this.processMessageData(q).catch((err) => this._onError(err));
